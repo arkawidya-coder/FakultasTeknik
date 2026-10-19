@@ -1,0 +1,1571 @@
+/**
+ * PORTAL AKREDITASI DKPS & REKAPITULASI PDDIKTI - SINTA
+ * Universitas PGRI Ronggolawe Tuban (UNIROW)
+ * Vanilla JavaScript SPA Engine
+ */
+
+let state = {
+  activeProdi: 'komparasi', // 'komparasi' | 'informatika' | 'industri'
+  activeTab: 'overview',     // 'overview' | 'dosen' | 'scopus' | 'scholar' | 'garuda' | 'riset_pkm' | 'hki_buku' | 'kurikulum' | 'mahasiswa'
+  dosenViewMode: 'cards',    // 'cards' | 'table'
+  searchQuery: '',
+  selectedYear: 'all',       // 'all' | '2026' | '2025' | ...
+  theme: localStorage.getItem('dkps_theme') || 'dark',
+  currentPage: 1,
+  pageSize: 15,
+  activeModalDosen: null
+};
+
+// Charts references
+let chartInstances = {};
+
+// Initialize on DOMContentLoaded
+document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
+  setupGlobalListeners();
+  renderApp();
+});
+
+function initTheme() {
+  document.documentElement.setAttribute('data-theme', state.theme);
+  const themeBtn = document.getElementById('theme-toggle-btn');
+  if (themeBtn) {
+    themeBtn.innerHTML = state.theme === 'dark' ? '☀️' : '🌙';
+  }
+}
+
+function toggleTheme() {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('dkps_theme', state.theme);
+  initTheme();
+  // Re-render charts with updated theme colors
+  if (state.activeProdi === 'komparasi') {
+    renderComparativeCharts();
+  }
+}
+
+function setupGlobalListeners() {
+  // Theme Toggle
+  const themeBtn = document.getElementById('theme-toggle-btn');
+  if (themeBtn) {
+    themeBtn.addEventListener('click', toggleTheme);
+  }
+
+  // Global search input
+  const globalSearch = document.getElementById('global-search');
+  if (globalSearch) {
+    globalSearch.addEventListener('input', (e) => {
+      state.searchQuery = e.target.value.toLowerCase().trim();
+      state.currentPage = 1;
+      renderActiveTabContent();
+    });
+  }
+
+  // Modal Close
+  const modalOverlay = document.getElementById('modal-overlay');
+  const modalClose = document.getElementById('modal-close-btn');
+  if (modalOverlay) {
+    modalOverlay.addEventListener('click', (e) => {
+      if (e.target === modalOverlay) closeModal();
+    });
+  }
+  if (modalClose) {
+    modalClose.addEventListener('click', closeModal);
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+  });
+}
+
+function switchProdi(prodiKey) {
+  state.activeProdi = prodiKey;
+  state.activeTab = 'overview';
+  state.searchQuery = '';
+  state.selectedYear = 'all';
+  state.currentPage = 1;
+
+  // Clear global search input
+  const searchInput = document.getElementById('global-search');
+  if (searchInput) searchInput.value = '';
+
+  // Update switcher button classes
+  document.querySelectorAll('.prodi-btn').forEach(btn => {
+    btn.classList.remove('active', 'industri-active', 'compare-active');
+    if (btn.dataset.prodi === prodiKey) {
+      btn.classList.add('active');
+      if (prodiKey === 'industri') btn.classList.add('industri-active');
+      if (prodiKey === 'komparasi') btn.classList.add('compare-active');
+    }
+  });
+
+  renderApp();
+}
+
+function switchTab(tabKey) {
+  state.activeTab = tabKey;
+  state.searchQuery = '';
+  state.currentPage = 1;
+  const searchInput = document.getElementById('global-search');
+  if (searchInput) searchInput.value = '';
+
+  renderTabsNav();
+  renderProdiYearBar();
+  renderActiveTabContent();
+}
+
+function renderApp() {
+  const container = document.getElementById('app-main-content');
+  if (!container) return;
+
+  if (state.activeProdi === 'komparasi') {
+    renderComparativeView(container);
+  } else {
+    renderSingleProdiView(container, state.activeProdi);
+  }
+}
+
+/* ===================================================================
+   1. KOMPARASI FAKULTAS TEKNIK (INFORMATIKA VS INDUSTRI)
+   =================================================================== */
+
+function renderComparativeView(container) {
+  const ifData = APP_DATA.informatika;
+  const tiData = APP_DATA.industri;
+
+  // Totals calculations
+  const ifDosenCount = ifData.dosen_sinta.length;
+  const tiDosenCount = tiData.dosen_sinta.length;
+  const ifScopusCount = ifData.scopus.length;
+  const tiScopusCount = tiData.scopus.length;
+  const ifScholarCount = ifData.gscholar.length;
+  const tiScholarCount = tiData.gscholar.length;
+  const ifGarudaCount = ifData.garuda.length;
+  const tiGarudaCount = tiData.garuda.length;
+  const ifRisetCount = ifData.penelitian.length;
+  const tiRisetCount = tiData.penelitian.length;
+  const ifPkmCount = ifData.pengabdian.length;
+  const tiPkmCount = tiData.pengabdian.length;
+  const ifHkiCount = ifData.hki.length;
+  const tiHkiCount = tiData.hki.length;
+  const ifBukuCount = ifData.buku.length;
+  const tiBukuCount = tiData.buku.length;
+
+  const ifSintaTotal = ifData.dosen_sinta.reduce((acc, d) => acc + (parseInt(d['Overall Score'] || d['SINTA Overall'] || 0) || 0), 0);
+  const tiSintaTotal = tiData.dosen_sinta.reduce((acc, d) => acc + (parseInt(d['SINTA Overall'] || d['Overall Score'] || 0) || 0), 0);
+
+  container.innerHTML = `
+    <div class="hero-banner">
+      <span class="hero-pill-badge">🏛️ FAKULTAS TEKNIK UNIROW • DASHBOARD TERPADU</span>
+      <h2 class="hero-title">Komparasi Data Akreditasi & Kinerja Tridharma</h2>
+      <p class="hero-desc">
+        Visualisasi perbandingan kuantitatif antara <strong>S1 Teknik Informatika</strong> dan <strong>S1 Teknik Industri</strong> berdasarkan pangkalan data resmi <strong>PDDikti</strong> dan <strong>SINTA Kemdiktisaintek RI</strong> per September 2026.
+      </p>
+    </div>
+
+    <!-- Side-by-side Hero Overview -->
+    <div class="compare-hero">
+      <div class="compare-box if-box">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <h3>💻 S1 Teknik Informatika</h3>
+            <p style="color:var(--text-secondary); font-size:12.5px;">Kode Prodi: 55201 • Akreditasi: <strong>Baik Sekali</strong></p>
+          </div>
+          <button class="btn-primary-outline" onclick="switchProdi('informatika')">Eksplorasi Detail →</button>
+        </div>
+        <div style="margin-top:16px; display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+          <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+            <div style="font-size:18px; font-weight:800; color:var(--primary-500);">${ifDosenCount}</div>
+            <div style="font-size:11px; color:var(--text-muted);">Dosen DTPS (S2)</div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+            <div style="font-size:18px; font-weight:800; color:var(--accent-cyan);">438</div>
+            <div style="font-size:11px; color:var(--text-muted);">Mahasiswa Aktif</div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+            <div style="font-size:18px; font-weight:800; color:var(--accent-purple);">${ifSintaTotal.toLocaleString()}</div>
+            <div style="font-size:11px; color:var(--text-muted);">Skor SINTA Total</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="compare-box ti-box">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <h3>🏭 S1 Teknik Industri</h3>
+            <p style="color:var(--text-secondary); font-size:12.5px;">Kode Prodi: 26201 • Akreditasi: <strong>Baik Sekali</strong></p>
+          </div>
+          <button class="btn-primary-outline" style="border-color:rgba(16,185,129,0.4); color:#10b981;" onclick="switchProdi('industri')">Eksplorasi Detail →</button>
+        </div>
+        <div style="margin-top:16px; display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+          <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+            <div style="font-size:18px; font-weight:800; color:#10b981;">${tiDosenCount}</div>
+            <div style="font-size:11px; color:var(--text-muted);">DTPS (1 S3, 8 S2)</div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+            <div style="font-size:18px; font-weight:800; color:var(--accent-cyan);">437</div>
+            <div style="font-size:11px; color:var(--text-muted);">Mahasiswa Aktif</div>
+          </div>
+          <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+            <div style="font-size:18px; font-weight:800; color:var(--accent-amber);">${tiSintaTotal.toLocaleString()}</div>
+            <div style="font-size:11px; color:var(--text-muted);">Skor SINTA Total</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Comparative KPI Grid -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-blue">👥</div>
+        <div class="kpi-label">Kecukupan DTPS</div>
+        <div class="kpi-value">${ifDosenCount} vs ${tiDosenCount}</div>
+        <div class="kpi-desc">Standar Minimal: 5 Dosen (Terpenuhi)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-emerald">⚖️</div>
+        <div class="kpi-label">Rasio Dosen : Mahasiswa</div>
+        <div class="kpi-value">1:31 vs 1:31</div>
+        <div class="kpi-desc">Standar SN-Dikti ≤ 1:35 (Sangat Sehat)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-purple">🌐</div>
+        <div class="kpi-label">Publikasi Scopus</div>
+        <div class="kpi-value">${ifScopusCount} vs ${tiScopusCount}</div>
+        <div class="kpi-desc">Artikel Internasional Bereputasi</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-amber">📚</div>
+        <div class="kpi-label">Google Scholar & Sitasi</div>
+        <div class="kpi-value">1.675 vs 1.334</div>
+        <div class="kpi-desc">Total Sitasi Akademik Google Scholar</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-rose">🔬</div>
+        <div class="kpi-label">Hibah Riset Penelitian</div>
+        <div class="kpi-value">${ifRisetCount} vs ${tiRisetCount}</div>
+        <div class="kpi-desc">Judul Riset Terdata di SINTA</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-blue">💡</div>
+        <div class="kpi-label">Perolehan HKI & Paten</div>
+        <div class="kpi-value">${ifHkiCount} vs ${tiHkiCount}</div>
+        <div class="kpi-desc">Sertifikat DJKI Kemenkumham RI</div>
+      </div>
+    </div>
+
+    <!-- Charts Grid -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">📊 Perbandingan Luaran Tridharma</div>
+            <div class="chart-subtitle">Scopus, Riset, PkM, HKI, dan Buku Ajar</div>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-tridharma-compare"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">📈 Tren Historis Mahasiswa Aktif</div>
+            <div class="chart-subtitle">10 Semester Terakhir (2020/2021 - 2025/2026)</div>
+          </div>
+        </div>
+        <div class="chart-canvas-wrap">
+          <canvas id="chart-mhs-trend-compare"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Download Central -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>📥 Unduh Berkas Master Excel (.xlsx)</h3>
+          <p>Seluruh data PDDikti & SINTA terintegrasi lengkap 22 sheet untuk keperluan akreditasi</p>
+        </div>
+      </div>
+      <div style="padding: 20px; display:flex; gap:16px; flex-wrap:wrap;">
+        <a href="REKAP_SEMUA_DATA_PDDIKTI_DAN_SINTA.xlsx" download class="btn-primary-outline" style="padding:12px 20px; font-size:13px;">
+          📊 Unduh Master Excel Teknik Informatika (22 Sheet .xlsx)
+        </a>
+        <a href="Teknik Industri/REKAP_SEMUA_DATA_PDDIKTI_DAN_SINTA.xlsx" download class="btn-primary-outline" style="padding:12px 20px; font-size:13px; border-color:rgba(16,185,129,0.4); color:#10b981;">
+          📊 Unduh Master Excel Teknik Industri (22 Sheet .xlsx)
+        </a>
+      </div>
+    </div>
+  `;
+
+  // Initialize Charts
+  setTimeout(renderComparativeCharts, 50);
+}
+
+function renderComparativeCharts() {
+  const isDark = state.theme === 'dark';
+  const textColor = isDark ? '#94a3b8' : '#475569';
+  const gridColor = isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.06)';
+
+  // Destroy previous instances
+  if (chartInstances.tridharma) chartInstances.tridharma.destroy();
+  if (chartInstances.mhs) chartInstances.mhs.destroy();
+
+  const ctxTridharma = document.getElementById('chart-tridharma-compare');
+  if (ctxTridharma && typeof Chart !== 'undefined') {
+    chartInstances.tridharma = new Chart(ctxTridharma, {
+      type: 'bar',
+      data: {
+        labels: ['Scopus', 'Scholar (x10)', 'Garuda', 'Penelitian', 'PkM', 'HKI/Paten', 'Buku Ajar'],
+        datasets: [
+          {
+            label: 'Teknik Informatika',
+            data: [10, 70.5, 510, 12, 15, 12, 12],
+            backgroundColor: 'rgba(59, 130, 246, 0.85)',
+            borderColor: '#3b82f6',
+            borderRadius: 6
+          },
+          {
+            label: 'Teknik Industri',
+            data: [11, 90.0, 222, 502, 139, 131, 3],
+            backgroundColor: 'rgba(16, 185, 129, 0.85)',
+            borderColor: '#10b981',
+            borderRadius: 6
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: textColor, font: { family: 'Plus Jakarta Sans', size: 12 } } }
+        },
+        scales: {
+          x: { grid: { color: gridColor }, ticks: { color: textColor } },
+          y: { grid: { color: gridColor }, ticks: { color: textColor } }
+        }
+      }
+    });
+  }
+
+  const ctxMhs = document.getElementById('chart-mhs-trend-compare');
+  if (ctxMhs && typeof Chart !== 'undefined') {
+    // 10 recent semesters
+    const semesters = ['2020/21 Ganjil', '2020/21 Genap', '2021/22 Ganjil', '2021/22 Genap', '2022/23 Ganjil', '2022/23 Genap', '2023/24 Ganjil', '2023/24 Genap', '2024/25 Ganjil', '2024/25 Genap'];
+    const ifMhs = [280, 276, 268, 267, 325, 324, 379, 379, 437, 438];
+    const tiMhs = [280, 276, 268, 267, 325, 324, 379, 379, 437, 436];
+
+    chartInstances.mhs = new Chart(ctxMhs, {
+      type: 'line',
+      data: {
+        labels: semesters,
+        datasets: [
+          {
+            label: 'Teknik Informatika',
+            data: ifMhs,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2.5
+          },
+          {
+            label: 'Teknik Industri',
+            data: tiMhs,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2.5
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: textColor, font: { family: 'Plus Jakarta Sans', size: 12 } } }
+        },
+        scales: {
+          x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+          y: { grid: { color: gridColor }, ticks: { color: textColor } }
+        }
+      }
+    });
+  }
+}
+
+/* ===================================================================
+   2. SINGLE PRODI VIEW (INFORMATIKA ATAU INDUSTRI)
+   =================================================================== */
+
+function renderSingleProdiView(container, prodiKey) {
+  const isIF = prodiKey === 'informatika';
+  const prodiName = isIF ? 'S1 Teknik Informatika' : 'S1 Teknik Industri';
+  const prodiCode = isIF ? '55201' : '26201';
+  const pddiktiData = APP_DATA[prodiKey];
+
+  container.innerHTML = `
+    <div class="hero-banner">
+      <span class="hero-pill-badge">${isIF ? '💻 TEKNOLOGI INFORMASI' : '🏭 REKAYASA INDUSTRI'} • KODE PRODI: ${prodiCode}</span>
+      <h2 class="hero-title">${prodiName}</h2>
+      <p class="hero-desc">
+        Pusat Data Kuantitatif & Rekapitulasi Tridharma Resmi Program Studi ${prodiName}, Fakultas Teknik, Universitas PGRI Ronggolawe Tuban. Terakreditasi <strong>Baik Sekali</strong>.
+      </p>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs-nav" id="prodi-subtabs-nav"></div>
+
+    <!-- Quick Year Filter Bar for All Tabs -->
+    <div class="prodi-year-bar" id="prodi-year-bar"></div>
+
+    <!-- Tab Content Area -->
+    <div id="prodi-tab-content"></div>
+  `;
+
+  renderTabsNav();
+  renderProdiYearBar();
+  renderActiveTabContent();
+}
+
+function renderTabsNav() {
+  const nav = document.getElementById('prodi-subtabs-nav');
+  if (!nav) return;
+
+  const prodiKey = state.activeProdi;
+  const data = APP_DATA[prodiKey];
+
+  const tabs = [
+    { key: 'overview', label: '📊 Ringkasan & Profil', badge: 'Akreditasi' },
+    { key: 'dosen', label: '👨‍🏫 Dosen DTPS', badge: data.dosen_sinta.length },
+    { key: 'scopus', label: '🌐 Scopus', badge: data.scopus.length },
+    { key: 'scholar', label: '📚 Google Scholar', badge: data.gscholar.length },
+    { key: 'garuda', label: '🇮🇩 Garuda / SINTA', badge: data.garuda.length },
+    { key: 'riset_pkm', label: '🔬 Riset & PkM', badge: data.penelitian.length + data.pengabdian.length },
+    { key: 'hki_buku', label: '💡 HKI & Buku', badge: data.hki.length + data.buku.length },
+    { key: 'kurikulum', label: '📖 Kurikulum & Matkul', badge: data.kurikulum.length },
+    { key: 'mahasiswa', label: '👥 Mahasiswa', badge: '49 Sem' },
+  ];
+
+  nav.innerHTML = tabs.map(t => `
+    <button class="tab-link ${state.activeTab === t.key ? 'active' : ''}" onclick="switchTab('${t.key}')">
+      ${t.label}
+      <span class="tab-badge">${t.badge}</span>
+    </button>
+  `).join('');
+}
+
+function renderActiveTabContent() {
+  const container = document.getElementById('prodi-tab-content');
+  if (!container) return;
+
+  const prodiKey = state.activeProdi;
+  const data = APP_DATA[prodiKey];
+
+  switch (state.activeTab) {
+    case 'overview':
+      renderTabOverview(container, data, prodiKey);
+      break;
+    case 'dosen':
+      renderTabDosen(container, data, prodiKey);
+      break;
+    case 'scopus':
+      renderTabScopus(container, data, prodiKey);
+      break;
+    case 'scholar':
+      renderTabScholar(container, data, prodiKey);
+      break;
+    case 'garuda':
+      renderTabGaruda(container, data, prodiKey);
+      break;
+    case 'riset_pkm':
+      renderTabRisetPkM(container, data, prodiKey);
+      break;
+    case 'hki_buku':
+      renderTabHKIBuku(container, data, prodiKey);
+      break;
+    case 'kurikulum':
+      renderTabKurikulum(container, data, prodiKey);
+      break;
+    case 'mahasiswa':
+      renderTabMahasiswa(container, data, prodiKey);
+      break;
+    default:
+      renderTabOverview(container, data, prodiKey);
+  }
+}
+
+/* ===================================================================
+   TAB RENDERERS
+   =================================================================== */
+
+// 1. Overview Tab
+function renderTabOverview(container, data, prodiKey) {
+  const isIF = prodiKey === 'informatika';
+  const dosenCount = data.dosen_sinta.length;
+  const scopusList = applyFilters(data.scopus, [], ['Tahun', 'tahun']);
+  const scholarList = applyFilters(data.gscholar, [], ['Tahun', 'tahun']);
+  const sintaTotal = data.dosen_sinta.reduce((acc, d) => acc + (parseInt(d['SINTA Overall'] || d['Overall Score'] || 0) || 0), 0);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Filter Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <!-- KPI Overview -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-blue">👨‍🏫</div>
+        <div class="kpi-label">Dosen Tetap (DTPS)</div>
+        <div class="kpi-value">${dosenCount} Dosen</div>
+        <div class="kpi-desc">100% S2/S3 & Tersertifikasi Serdik</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-emerald">🎓</div>
+        <div class="kpi-label">Peringkat Akreditasi</div>
+        <div class="kpi-value" style="color:var(--accent-emerald);">Baik Sekali</div>
+        <div class="kpi-desc">Standar LAM / BAN-PT (Status Aktif)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-purple">🌐</div>
+        <div class="kpi-label">Publikasi Scopus ${state.selectedYear !== 'all' ? `(${state.selectedYear})` : ''}</div>
+        <div class="kpi-value">${scopusList.length} Artikel</div>
+        <div class="kpi-desc">${state.selectedYear !== 'all' ? `Artikel terindeks Scopus tahun ${state.selectedYear}` : 'Jurnal Internasional Bereputasi'}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-icon-wrap kpi-icon-amber">⚡</div>
+        <div class="kpi-label">Google Scholar ${state.selectedYear !== 'all' ? `(${state.selectedYear})` : ''}</div>
+        <div class="kpi-value">${scholarList.length} Dokumen</div>
+        <div class="kpi-desc">${state.selectedYear !== 'all' ? `Dokumen Scholar tahun ${state.selectedYear}` : 'Total Dokumen Publikasi Ilmiah'}</div>
+      </div>
+    </div>
+
+    <!-- Identitas Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>📌 Profil Resmi Program Studi & Perguruan Tinggi (PDDikti) ${yearBadge}</h3>
+          <p>Data identitas dan izin operasional resmi Kementerian Pendidikan Tinggi, Sains, dan Teknologi</p>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <tbody>
+            <tr><td style="width:280px; font-weight:700;">Nama Program Studi</td><td>${isIF ? 'S1 Teknik Informatika' : 'S1 Teknik Industri'}</td></tr>
+            <tr><td style="font-weight:700;">Kode Program Studi</td><td>${isIF ? '55201' : '26201'}</td></tr>
+            <tr><td style="font-weight:700;">Perguruan Tinggi</td><td>Universitas PGRI Ronggolawe Tuban (Kode PT: 071073 | SINTA Affiliation ID: 2100)</td></tr>
+            <tr><td style="font-weight:700;">Unit Pengelola (UPPS)</td><td>Fakultas Teknik</td></tr>
+            <tr><td style="font-weight:700;">Peringkat Akreditasi</td><td><span class="badge badge-emerald">Baik Sekali</span> (Status: Aktif)</td></tr>
+            <tr><td style="font-weight:700;">SK Izin Penyelenggaraan</td><td>${isIF ? '9895/D/T/K-VII/2011' : '180/D/O/2007'}</td></tr>
+            <tr><td style="font-weight:700;">Rasio Dosen : Mahasiswa</td><td><span class="badge badge-blue">${isIF ? '1 : 31.43' : '1 : 31.21'}</span> (Sesuai SN-Dikti ≤ 1:35)</td></tr>
+            <tr><td style="font-weight:700;">Rentang Biaya Kuliah</td><td>Rp 3.960.000,- per semester</td></tr>
+            <tr><td style="font-weight:700;">Alamat Kampus</td><td>Jl. Manunggal No. 61, Tuban, Jawa Timur 62381</td></tr>
+            <tr><td style="font-weight:700;">Website & Kontak</td><td>${isIF ? 'http://informatika.unirow.ac.id/ | prodi@informatika.unirow.ac.id' : 'http://industri.unirow.ac.id/ | prodi@industri.unirow.ac.id'} | Telp: (0356) 322233</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// 2. Dosen DTPS Tab
+function renderTabDosen(container, data, prodiKey) {
+  const dosenList = data.dosen_sinta;
+  const years = extractDistinctYears([
+    ...(data.scopus || []),
+    ...(data.gscholar || []),
+    ...(data.garuda || []),
+    ...(data.penelitian || []),
+    ...(data.pengabdian || []),
+    ...(data.hki || []),
+    ...(data.buku || [])
+  ], ['Tahun', 'tahun']);
+  const filtered = filterList(dosenList, ['Nama Dosen', 'NIDN', 'SINTA ID', 'Pendidikan Pascasarjana']);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <div class="table-toolbar" style="margin-bottom:20px; background:var(--bg-card); border-radius:var(--radius-lg); border:1px solid var(--border-subtle);">
+      <div class="table-title-area">
+        <h3>Dosen Tetap Penugasan Program Studi (DTPS) ${yearBadge}</h3>
+        <p>Menampilkan ${filtered.length} dosen tetap ber-NIDN aktif lengkap dengan metrik SINTA</p>
+      </div>
+      <div class="table-controls">
+        ${renderYearFilterSelect(years, state.selectedYear)}
+        <input type="text" class="table-search-input" placeholder="Cari dosen, NIDN..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+      </div>
+    </div>
+
+    <div class="dosen-cards-grid">
+      ${filtered.map(d => {
+        const name = d['Nama Dosen'] || d['nama_dosen'] || '-';
+        const nidn = d['NIDN'] || d['nidn'] || '-';
+        const sintaId = d['SINTA ID'] || d['sinta_id'] || '-';
+        const sintaOv = d['SINTA Overall'] || d['Overall Score'] || d['sinta_score_overall'] || '0';
+        const scopusArt = d['Scopus Articles'] || d['scopus_art'] || (d['Scopus (Art/H)'] ? d['Scopus (Art/H)'].split('/')[0].trim() : '0');
+        const scholarCit = d['Scholar Citations'] || d['gscholar_cit'] || (d['Scholar (Art/Cit/H)'] ? d['Scholar (Art/Cit/H)'].split('/')[1]?.trim() : '0');
+
+        return `
+          <div class="dosen-card" onclick="openDosenModal('${escapeHtml(name)}', '${prodiKey}')">
+            <div>
+              <div class="dosen-header">
+                <div class="dosen-avatar">${getInitials(name)}</div>
+                <div class="dosen-info">
+                  <h4>${escapeHtml(name)}</h4>
+                  <div class="dosen-nidn">NIDN: ${nidn}</div>
+                  <div style="margin-top:4px;">
+                    <span class="badge badge-emerald">Serdik: V</span>
+                    <span class="badge badge-blue">SINTA ID: ${sintaId}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="dosen-metrics-grid">
+                <div>
+                  <div class="dosen-metric-val" style="color:var(--primary-500);">${sintaOv}</div>
+                  <div class="dosen-metric-lbl">SINTA Ov.</div>
+                </div>
+                <div>
+                  <div class="dosen-metric-val" style="color:var(--accent-purple);">${scopusArt}</div>
+                  <div class="dosen-metric-lbl">Scopus Art.</div>
+                </div>
+                <div>
+                  <div class="dosen-metric-val" style="color:var(--accent-amber);">${scholarCit}</div>
+                  <div class="dosen-metric-lbl">Sitasi Scholar</div>
+                </div>
+              </div>
+            </div>
+            <div class="dosen-footer">
+              <span>Klik untuk melihat dossier lengkap</span>
+              <span style="font-weight:700;">→</span>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// 3. Scopus Tab
+function renderTabScopus(container, data, prodiKey) {
+  const list = data.scopus;
+  const years = extractDistinctYears(list, ['Tahun', 'tahun']);
+  const filtered = applyFilters(list, ['Judul Artikel Ilmiah', 'Judul', 'Judul Artikel', 'Nama Dosen DTPS', 'Nama Dosen', 'Penulis DTPS', 'Nama Jurnal / Prosiding', 'Jurnal'], ['Tahun', 'tahun']);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>Publikasi Internasional Terindeks Scopus (${filtered.length} Artikel) ${yearBadge}</h3>
+          <p>Seluruh publikasi bereputasi terindeks Scopus karya dosen DTPS</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <input type="text" class="table-search-input" placeholder="Cari judul, penulis..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('Scopus_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table" id="export-target-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Judul Publikasi Scopus</th>
+              <th>Penulis (DTPS)</th>
+              <th style="width:80px;">Quartile</th>
+              <th style="width:70px;">Tahun</th>
+              <th style="width:70px;">Sitasi</th>
+              <th>Nama Jurnal / Prosiding</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filtered.length === 0 ? `<tr><td colspan="8" style="text-align:center; padding:24px;">Tidak ada data artikel Scopus ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}. <button class="badge badge-blue" style="cursor:pointer;" onclick="onYearFilterChange('all')">Lihat Semua Tahun</button>` : ''}</td></tr>` :
+              filtered.map((item, idx) => {
+                const title = item['Judul Artikel Ilmiah'] || item['Judul'] || item['Judul Artikel'] || '-';
+                const author = item['Nama Dosen DTPS'] || item['Nama Dosen'] || item['Penulis DTPS'] || '-';
+                const q = item['Quartile'] || '-';
+                const year = item['Tahun'] || item['tahun'] || '-';
+                const cit = item['Sitasi'] || item['sitasi'] || '0';
+                const pub = item['Nama Jurnal / Prosiding'] || item['Jurnal'] || item['publikasi'] || '-';
+                const link = item['Link'] || item['link'] || (item['DOI'] ? `https://doi.org/${item['DOI']}` : `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`);
+
+                let qBadge = 'badge-noq';
+                if (q.includes('Q1')) qBadge = 'badge-q1';
+                else if (q.includes('Q2')) qBadge = 'badge-q2';
+                else if (q.includes('Q3')) qBadge = 'badge-q3';
+                else if (q.includes('Q4')) qBadge = 'badge-q4';
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td style="font-weight:600; color:var(--text-primary); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td style="white-space:nowrap;"><strong>${escapeHtml(author)}</strong></td>
+                    <td style="text-align:center;"><span class="badge ${qBadge}">${q}</span></td>
+                    <td style="text-align:center;">${year}</td>
+                    <td style="text-align:center;"><span class="badge badge-amber">${cit} cit</span></td>
+                    <td>${escapeHtml(pub)}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge badge-purple" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;" title="Buka Publikasi di Scopus / Scholar">Buka Scopus ↗</a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// 4. Google Scholar Tab (Paginated)
+function renderTabScholar(container, data, prodiKey) {
+  const list = data.gscholar;
+  const years = extractDistinctYears(list, ['Tahun', 'tahun']);
+  const filtered = applyFilters(list, ['Judul Artikel Ilmiah', 'Judul', 'judul', 'Judul Publikasi', 'Nama Dosen DTPS', 'Nama Dosen', 'nama_dosen', 'Jurnal / Penerbit', 'Jurnal'], ['Tahun', 'tahun']);
+  const paginated = paginateList(filtered, state.currentPage, state.pageSize);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>Publikasi Google Scholar (${filtered.length} Dokumen Terdaftar) ${yearBadge}</h3>
+          <p>Menampilkan halaman ${state.currentPage} dari ${paginated.totalPages || 1}</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <input type="text" class="table-search-input" placeholder="Cari artikel scholar..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('GoogleScholar_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table" id="export-target-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Judul Publikasi</th>
+              <th>Penulis</th>
+              <th style="width:70px;">Tahun</th>
+              <th style="width:80px;">Sitasi</th>
+              <th>Jurnal / Penerbit</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paginated.items.length === 0 ? `<tr><td colspan="7" style="text-align:center; padding:24px;">Tidak ada artikel ditemukan ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}. <button class="badge badge-blue" style="cursor:pointer;" onclick="onYearFilterChange('all')">Lihat Semua Tahun</button>` : ''}</td></tr>` :
+              paginated.items.map((item, idx) => {
+                const globalIdx = (state.currentPage - 1) * state.pageSize + idx + 1;
+                const title = item['Judul Artikel Ilmiah'] || item['Judul'] || item['judul'] || item['Judul Publikasi'] || '-';
+                const author = item['Nama Dosen DTPS'] || item['Nama Dosen'] || item['nama_dosen'] || '-';
+                const year = item['Tahun'] || item['tahun'] || '-';
+                const cit = item['Sitasi'] || item['sitasi'] || '0';
+                const pub = item['Jurnal / Penerbit'] || item['Jurnal'] || item['publikasi'] || '-';
+                const link = item['Link'] || item['link'] || `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${globalIdx}</td>
+                    <td style="font-weight:600; color:var(--text-primary); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td style="white-space:nowrap;"><strong>${escapeHtml(author)}</strong></td>
+                    <td style="text-align:center;">${year}</td>
+                    <td style="text-align:center;"><span class="badge badge-amber">${cit}</span></td>
+                    <td>${escapeHtml(pub)}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge badge-blue" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;" title="Buka di Google Scholar">Buka Scholar ↗</a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <div>Menampilkan ${paginated.start} - ${paginated.end} dari total ${filtered.length} artikel</div>
+        <div class="pagination-controls">
+          <button class="page-btn" ${state.currentPage <= 1 ? 'disabled' : ''} onclick="changePage(${state.currentPage - 1})">← Sebelumnya</button>
+          <span style="padding:0 8px; font-weight:600;">Halaman ${state.currentPage} / ${paginated.totalPages || 1}</span>
+          <button class="page-btn" ${state.currentPage >= paginated.totalPages ? 'disabled' : ''} onclick="changePage(${state.currentPage + 1})">Selanjutnya →</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 5. Garuda Tab (Paginated)
+function renderTabGaruda(container, data, prodiKey) {
+  const list = data.garuda;
+  const years = extractDistinctYears(list, ['Tahun', 'tahun']);
+  const filtered = applyFilters(list, ['Judul Artikel Ilmiah', 'Judul', 'judul', 'Nama Dosen DTPS', 'Nama Dosen', 'Nama Jurnal', 'Jurnal', 'SINTA Level'], ['Tahun', 'tahun']);
+  const paginated = paginateList(filtered, state.currentPage, state.pageSize);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>Publikasi Jurnal Nasional Garuda / SINTA (${filtered.length} Artikel) ${yearBadge}</h3>
+          <p>Publikasi pada jurnal nasional terakreditasi karya dosen</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <input type="text" class="table-search-input" placeholder="Cari jurnal nasional..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('Garuda_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table" id="export-target-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Judul Publikasi / Artikel Ilmiah</th>
+              <th style="width:80px;">SINTA</th>
+              <th style="width:120px;">Penulis</th>
+              <th style="width:70px;">Tahun</th>
+              <th>Nama Jurnal Nasional</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paginated.items.length === 0 ? `<tr><td colspan="7" style="text-align:center; padding:24px;">Tidak ada artikel ditemukan ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}. <button class="badge badge-blue" style="cursor:pointer;" onclick="onYearFilterChange('all')">Lihat Semua Tahun</button>` : ''}</td></tr>` :
+              paginated.items.map((item, idx) => {
+                const globalIdx = (state.currentPage - 1) * state.pageSize + idx + 1;
+                const title = item['Judul Artikel Ilmiah'] || item['Judul'] || item['judul'] || '-';
+                const author = item['Nama Dosen DTPS'] || item['Nama Dosen'] || item['nama_dosen'] || '-';
+                const sl = item['SINTA Level'] || '-';
+                const slNum = sl.match(/\d+/)?.[0] || '';
+                const slColor = slNum==='1'?'#10b981':slNum==='2'?'#06b6d4':slNum==='3'?'#3b82f6':slNum==='4'?'#f59e0b':'#6b7280';
+                const doi = item['DOI'] || '';
+                const link = item['Link'] || item['link'] || (doi ? `https://doi.org/${doi}` : `https://garuda.kemdikbud.go.id/documents?q=${encodeURIComponent(title)}`);
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${globalIdx}</td>
+                    <td style="font-weight:600; color:var(--text-primary); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td style="text-align:center;">
+                      ${sl !== '-' ? `<span style="font-size:10px; font-weight:700; color:${slColor}; background:${slColor}22; padding:2px 7px; border-radius:10px;">${sl}</span>` : '-'}
+                    </td>
+                    <td style="white-space:nowrap; font-size:12px;"><strong>${escapeHtml(author)}</strong></td>
+                    <td style="text-align:center;">${item['Tahun'] || item['tahun'] || '-'}</td>
+                    <td style="font-size:12px;">${escapeHtml(item['Nama Jurnal'] || item['Jurnal'] || item['publikasi'] || '-')}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge ${doi ? 'badge-blue' : 'badge-emerald'}" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;" title="Buka Publikasi di Garuda">
+                        ${doi ? 'DOI ↗' : 'Buka Garuda ↗'}
+                      </a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <div>Menampilkan ${paginated.start} - ${paginated.end} dari total ${filtered.length} artikel</div>
+        <div class="pagination-controls">
+          <button class="page-btn" ${state.currentPage <= 1 ? 'disabled' : ''} onclick="changePage(${state.currentPage - 1})">← Sebelumnya</button>
+          <span style="padding:0 8px; font-weight:600;">Halaman ${state.currentPage} / ${paginated.totalPages || 1}</span>
+          <button class="page-btn" ${state.currentPage >= paginated.totalPages ? 'disabled' : ''} onclick="changePage(${state.currentPage + 1})">Selanjutnya →</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 6. Riset & PkM Tab
+function renderTabRisetPkM(container, data, prodiKey) {
+  const risetList = data.penelitian;
+  const pkmList = data.pengabdian;
+  const years = extractDistinctYears([...risetList, ...pkmList], ['Tahun', 'tahun']);
+  const filteredRiset = applyFilters(risetList, ['Judul Penelitian', 'Judul', 'Ketua / Dosen', 'Ketua', 'Deskripsi Lengkap'], ['Tahun', 'tahun']);
+  const filteredPkm = applyFilters(pkmList, ['Judul Kegiatan PkM', 'Judul', 'Ketua / Dosen', 'Ketua', 'Deskripsi Lengkap'], ['Tahun', 'tahun']);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <!-- Penelitian Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>🔬 Rekam Jejak Riset & Hibah Penelitian (${filteredRiset.length} Kegiatan) ${yearBadge}</h3>
+          <p>Kegiatan penelitian didanai hibah DRTPM, Kemdiktisaintek, dan riset internal</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <input type="text" class="table-search-input" placeholder="Cari judul riset, ketua..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('Penelitian_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Ketua / Pelaksana</th>
+              <th>Judul Kegiatan Riset</th>
+              <th>Skema Pendanaan</th>
+              <th style="width:70px;">Tahun</th>
+              <th>Dana</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredRiset.length === 0 ? `<tr><td colspan="7" style="text-align:center; padding:24px;">Tidak ada data penelitian ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}.` : ''}</td></tr>` :
+              filteredRiset.slice(0, 50).map((item, idx) => {
+                const title = item['Judul Penelitian'] || item['Judul'] || '-';
+                const author = item['Ketua / Dosen'] || item['Ketua'] || item['nama_dosen'] || '-';
+                const sintaId = item['SINTA ID'] || '';
+                const link = sintaId ? `https://sinta.kemdikbud.go.id/authors/profile/${sintaId}/?view=researches` : `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td style="white-space:nowrap; font-weight:600;">${escapeHtml(author)}</td>
+                    <td style="font-weight:600; color:var(--text-primary); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td><span class="badge badge-purple">${escapeHtml(item['Skema Pendanaan'] || item['Skema'] || '-')}</span></td>
+                    <td style="text-align:center;">${item['Tahun'] || item['tahun'] || '-'}</td>
+                    <td style="font-weight:600; color:var(--accent-emerald);">${escapeHtml(item['Nominal Dana (Rp)'] || item['Dana'] || '-')}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge badge-purple" style="text-decoration:none;" title="Lihat di SINTA">SINTA Riset ↗</a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+      ${filteredRiset.length > 50 ? `<div class="table-footer"><span>Menampilkan 50 judul dari total ${filteredRiset.length} riset terdaftar. Seluruh data dapat diunduh via Ekspor CSV.</span></div>` : ''}
+    </div>
+
+    <!-- PkM Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>🤝 Pengabdian Kepada Masyarakat (${filteredPkm.length} Kegiatan) ${yearBadge}</h3>
+          <p>Program pemberdayaan masyarakat, UMKM, dan industri mitra binaan</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('PkM_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Ketua / Pelaksana</th>
+              <th>Judul Program PkM</th>
+              <th>Skema Pendanaan</th>
+              <th style="width:70px;">Tahun</th>
+              <th>Dana</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredPkm.length === 0 ? `<tr><td colspan="7" style="text-align:center; padding:24px;">Tidak ada data kegiatan PkM ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}.` : ''}</td></tr>` :
+              filteredPkm.slice(0, 50).map((item, idx) => {
+                const title = item['Judul Kegiatan PkM'] || item['Judul'] || '-';
+                const author = item['Ketua / Dosen'] || item['Ketua'] || item['nama_dosen'] || '-';
+                const sintaId = item['SINTA ID'] || '';
+                const link = sintaId ? `https://sinta.kemdikbud.go.id/authors/profile/${sintaId}/?view=services` : `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td style="white-space:nowrap; font-weight:600;">${escapeHtml(author)}</td>
+                    <td style="font-weight:600; color:var(--text-primary); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td><span class="badge badge-blue">${escapeHtml(item['Skema Pendanaan'] || item['Skema'] || '-')}</span></td>
+                    <td style="text-align:center;">${item['Tahun'] || item['tahun'] || '-'}</td>
+                    <td style="font-weight:600; color:var(--accent-emerald);">${escapeHtml(item['Nominal Dana (Rp)'] || item['Dana'] || '-')}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge badge-blue" style="text-decoration:none;" title="Lihat di SINTA">SINTA PkM ↗</a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+      ${filteredPkm.length > 50 ? `<div class="table-footer"><span>Menampilkan 50 judul dari total ${filteredPkm.length} PkM terdaftar. Seluruh data dapat diunduh via Ekspor CSV.</span></div>` : ''}
+    </div>
+  `;
+}
+
+// 7. HKI & Buku Ajar Tab
+function renderTabHKIBuku(container, data, prodiKey) {
+  const hkiList = data.hki;
+  const bukuList = data.buku;
+  const years = extractDistinctYears([...hkiList, ...bukuList], ['Tahun', 'tahun']);
+  const filteredHki = applyFilters(hkiList, ['Judul Ciptaan / Paten', 'Judul', 'Inventor / Dosen', 'Inventor', 'Keterangan / Nomor Pendaftaran'], ['Tahun', 'tahun']);
+  const filteredBuku = applyFilters(bukuList, ['Judul Buku Ajar / Monograf', 'Judul', 'Penulis / Dosen', 'Penulis', 'Deskripsi / ISBN'], ['Tahun', 'tahun']);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <!-- HKI Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>💡 Hak Kekayaan Intelektual / Paten (${filteredHki.length} Sertifikat Terdaftar) ${yearBadge}</h3>
+          <p>Karya cipta piranti lunak, algoritma, desain sistem industri terdaftar resmi DJKI</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <input type="text" class="table-search-input" placeholder="Cari HKI, penemu..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('HKI_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Inventor / Penulis</th>
+              <th>Judul Ciptaan / Paten</th>
+              <th style="width:70px;">Tahun</th>
+              <th>Keterangan / Nomor Pendaftaran</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredHki.length === 0 ? `<tr><td colspan="6" style="text-align:center; padding:24px;">Tidak ada data HKI ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}.` : ''}</td></tr>` :
+              filteredHki.slice(0, 50).map((item, idx) => {
+                const title = item['Judul Ciptaan / Paten'] || item['Judul'] || '-';
+                const author = item['Inventor / Dosen'] || item['Inventor'] || item['nama_dosen'] || '-';
+                const sintaId = item['SINTA ID'] || '';
+                const link = sintaId ? `https://sinta.kemdikbud.go.id/authors/profile/${sintaId}/?view=iprs` : `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td style="white-space:nowrap; font-weight:600;">${escapeHtml(author)}</td>
+                    <td style="font-weight:600; color:var(--text-primary); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td style="text-align:center;"><span class="badge badge-emerald">${item['Tahun'] || item['tahun'] || '-'}</span></td>
+                    <td style="font-size:11.5px; color:var(--text-muted);">${escapeHtml(item['Keterangan / Nomor Pendaftaran'] || item['Deskripsi'] || '-')}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge badge-emerald" style="text-decoration:none;" title="Lihat di DJKI / SINTA">DJKI / SINTA ↗</a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+      ${filteredHki.length > 50 ? `<div class="table-footer"><span>Menampilkan 50 karya cipta dari total ${filteredHki.length} terdaftar. Seluruh data dapat diunduh via Ekspor CSV.</span></div>` : ''}
+    </div>
+
+    <!-- Buku Table -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>📖 Buku Ajar & Referensi Ber-ISBN (${filteredBuku.length} Buku) ${yearBadge}</h3>
+          <p>Buku teks ajar, modul praktikum, dan monograf ber-ISBN karya dosen DTPS</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('Buku_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Penulis</th>
+              <th>Judul Buku</th>
+              <th style="width:70px;">Tahun</th>
+              <th>Penerbit / Deskripsi</th>
+              <th style="width:110px; text-align:center;">Tautan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredBuku.length === 0 ? `<tr><td colspan="6" style="text-align:center; padding:24px;">Tidak ada data buku ${state.selectedYear !== 'all' ? `untuk tahun ${state.selectedYear}.` : ''}</td></tr>` :
+              filteredBuku.map((item, idx) => {
+                const title = item['Judul Buku Ajar / Monograf'] || item['Judul'] || '-';
+                const author = item['Penulis / Dosen'] || item['Penulis'] || item['nama_dosen'] || '-';
+                const sintaId = item['SINTA ID'] || '';
+                const link = sintaId ? `https://sinta.kemdikbud.go.id/authors/profile/${sintaId}/?view=books` : `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+
+                return `
+                  <tr>
+                    <td style="text-align:center;">${idx + 1}</td>
+                    <td style="white-space:nowrap; font-weight:600;">${escapeHtml(author)}</td>
+                    <td style="font-weight:700; color:var(--primary-500); line-height:1.4;">${escapeHtml(title)}</td>
+                    <td style="text-align:center;"><span class="badge badge-amber">${item['Tahun'] || item['tahun'] || '-'}</span></td>
+                    <td>${escapeHtml(item['Deskripsi / ISBN'] || item['Deskripsi'] || 'Buku Ber-ISBN')}</td>
+                    <td style="text-align:center;">
+                      <a href="${link}" target="_blank" rel="noopener" class="badge badge-amber" style="text-decoration:none;" title="Lihat di SINTA">SINTA Buku ↗</a>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// 8. Kurikulum Tab
+function renderTabKurikulum(container, data, prodiKey) {
+  const list = data.kurikulum;
+  const years = extractDistinctYears(list, ['Semester Terakhir']);
+  const filtered = applyFilters(list, ['Kode MK', 'Kode Mata Kuliah', 'Nama Mata Kuliah', 'Dosen Pengampu'], ['Semester Terakhir']);
+  const paginated = paginateList(filtered, state.currentPage, state.pageSize);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>📖 Struktur Kurikulum & Mata Kuliah (${filtered.length} Mata Kuliah) ${yearBadge}</h3>
+          <p>Mata kuliah terkonstruksi dari pangkalan data riwayat pengajaran PDDikti</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <input type="text" class="table-search-input" placeholder="Cari nama mata kuliah, kode MK..." value="${state.searchQuery}" oninput="onTabSearch(this.value)">
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('Kurikulum_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table" id="export-target-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th style="width:90px;">Kode MK</th>
+              <th>Nama Mata Kuliah</th>
+              <th style="width:130px;">Semester Terakhir</th>
+              <th style="width:90px;">Total Kelas</th>
+              <th>Dosen Pengampu</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paginated.items.map((item, idx) => {
+              const globalIdx = (state.currentPage - 1) * state.pageSize + idx + 1;
+              return `
+                <tr>
+                  <td style="text-align:center;">${globalIdx}</td>
+                  <td style="font-family:monospace; font-weight:700; color:var(--primary-500);">${escapeHtml(item['Kode MK'] || item['Kode Mata Kuliah'] || item['kode_matkul'] || '-')}</td>
+                  <td style="font-weight:600;">${escapeHtml(item['Nama Mata Kuliah'] || item['nama_matkul'] || '-')}</td>
+                  <td style="text-align:center;"><span class="badge badge-purple">${item['Semester Terakhir'] || item['semester_terakhir'] || '-'}</span></td>
+                  <td style="text-align:center; font-weight:700;">${item['Total Kelas'] || item['Total Kelas Diajarkan'] || item['total_kali_diajarkan'] || '1'}</td>
+                  <td>${escapeHtml(item['Dosen Pengampu'] || item['dosen_pengampu'] || '-')}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-footer">
+        <div>Menampilkan ${paginated.start} - ${paginated.end} dari total ${filtered.length} mata kuliah</div>
+        <div class="pagination-controls">
+          <button class="page-btn" ${state.currentPage <= 1 ? 'disabled' : ''} onclick="changePage(${state.currentPage - 1})">← Sebelumnya</button>
+          <span style="padding:0 8px; font-weight:600;">Halaman ${state.currentPage} / ${paginated.totalPages || 1}</span>
+          <button class="page-btn" ${state.currentPage >= paginated.totalPages ? 'disabled' : ''} onclick="changePage(${state.currentPage + 1})">Selanjutnya →</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 9. Mahasiswa Tab
+function renderTabMahasiswa(container, data, prodiKey) {
+  const mhsHistory = data.mhs_historis;
+  const years = extractDistinctYears(mhsHistory, ['Tahun Akademik / Semester']);
+  const filtered = applyFilters(mhsHistory, ['Tahun Akademik / Semester'], ['Tahun Akademik / Semester']);
+  const yearBadge = state.selectedYear !== 'all' ? `<span class="badge badge-blue" style="cursor:pointer; margin-left:8px;" onclick="onYearFilterChange('all')" title="Klik untuk reset">Tahun: ${state.selectedYear} ✕</span>` : '';
+
+  container.innerHTML = `
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="table-title-area">
+          <h3>👥 Deret Waktu Historis Mahasiswa & Dosen (${filtered.length} Semester Terdaftar) ${yearBadge}</h3>
+          <p>Catatan resmi PDDikti dari semester 20021 hingga semester terkini 20242</p>
+        </div>
+        <div class="table-controls">
+          ${renderYearFilterSelect(years, state.selectedYear)}
+          <button class="btn-primary-outline" onclick="exportCurrentTableToCSV('Mahasiswa_Historis_${prodiKey}.csv')">📥 Ekspor CSV</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="data-table" id="export-target-table">
+          <thead>
+            <tr>
+              <th style="width:50px;">No</th>
+              <th>Tahun Akademik / Semester</th>
+              <th style="width:140px; text-align:center;">Mahasiswa Aktif</th>
+              <th style="width:140px; text-align:center;">Dosen Homebase</th>
+              <th style="width:140px; text-align:center;">Dosen Pengajar</th>
+              <th style="width:150px; text-align:center;">Rasio Dosen : Mhs</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filtered.map((item, idx) => {
+              const sem = item['Tahun Akademik / Semester'] || item['Semester'] || item['semester'] || '-';
+              const mhs = item['Mahasiswa Aktif'] || item['jumlah_mahasiswa'] || 0;
+              const dos = item['Dosen Tetap Homebase'] || item['Dosen Tetap'] || item['jumlah_dosen'] || 0;
+              const ajar = item['Dosen Pengajar'] || item['Dosen Ajar'] || item['jumlah_dosen_ajar'] || 0;
+              const rasio = dos > 0 ? `1 : ${(mhs / dos).toFixed(1)}` : '-';
+
+              return `
+                <tr>
+                  <td style="text-align:center;">${idx + 1}</td>
+                  <td style="font-weight:600;">${escapeHtml(sem)}</td>
+                  <td style="text-align:center; font-weight:700; color:var(--primary-500);">${mhs}</td>
+                  <td style="text-align:center;">${dos}</td>
+                  <td style="text-align:center;">${ajar}</td>
+                  <td style="text-align:center;"><span class="badge badge-emerald">${rasio}</span></td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+/* ===================================================================
+   MODAL DOSEN DOSSIER
+   =================================================================== */
+
+function openDosenModal(dosenName, prodiKey) {
+  const data = APP_DATA[prodiKey];
+
+  // Extract base name (remove titles/gelar after comma) for flexible matching
+  // "Andy Haryoko, S.T., M.T." -> "andy haryoko"
+  const baseName = dosenName.split(',')[0].toLowerCase().trim();
+
+  // Bidirectional match: pubName contains baseName OR baseName contains pubName
+  function nameMatch(pubNameRaw) {
+    const pubName = (pubNameRaw || '').toLowerCase().trim();
+    return pubName.includes(baseName) || baseName.includes(pubName) || pubName === baseName;
+  }
+
+  const sintaInfo = data.dosen_sinta.find(d => nameMatch(d['Nama Dosen'] || d['nama_dosen'])) || {};
+  const lengkapInfo = data.dosen_lengkap.find(d => nameMatch(d['Nama Dosen'] || d['nama_dosen'])) || {};
+
+  // Find publications using flexible name matching
+  const scopusList = data.scopus.filter(d => nameMatch(d['Nama Dosen'] || d['Penulis DTPS'] || d['Nama Dosen DTPS']));
+  const scholarList = data.gscholar.filter(d => nameMatch(d['Nama Dosen'] || d['Nama Dosen DTPS']));
+  const garudaList = data.garuda.filter(d => nameMatch(d['Nama Dosen'] || d['Nama Dosen DTPS']));
+  const penelitianList = (data.penelitian || []).filter(d => nameMatch(d['Nama Dosen'] || d['Ketua'] || d['Anggota']));
+  const pengabdianList = (data.pengabdian || []).filter(d => nameMatch(d['Nama Dosen'] || d['Ketua'] || d['Anggota']));
+
+  const modalOverlay = document.getElementById('modal-overlay');
+  const modalTitle = document.getElementById('modal-title');
+  const modalContent = document.getElementById('modal-content');
+
+  if (!modalOverlay || !modalTitle || !modalContent) return;
+
+  modalTitle.innerHTML = `👨‍🏫 Dossier Akademik: ${escapeHtml(dosenName)}`;
+
+  modalContent.innerHTML = `
+    <div style="display:flex; align-items:flex-start; gap:16px; margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border-subtle);">
+      <div class="dosen-avatar" style="width:64px; height:64px; font-size:22px;">${getInitials(dosenName)}</div>
+      <div>
+        <h3 style="font-size:18px; font-weight:800; margin-bottom:4px;">${escapeHtml(dosenName)}</h3>
+        <p style="font-size:12.5px; color:var(--text-secondary); margin-bottom:6px;">
+          NIDN: <strong>${sintaInfo['NIDN'] || lengkapInfo['NIDN'] || '-'}</strong> • Jabatan: <strong>${lengkapInfo['Jabatan Akademik'] || 'Asisten Ahli'}</strong>
+        </p>
+        <div>
+          <span class="badge badge-emerald">Serdik: Terverifikasi</span>
+          <span class="badge badge-blue">SINTA ID: ${sintaInfo['SINTA ID'] || '-'}</span>
+          <span class="badge badge-purple">${prodiKey === 'informatika' ? 'Teknik Informatika' : 'Teknik Industri'}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Riwayat Studi -->
+    <div style="margin-bottom:20px;">
+      <h4 style="font-size:14px; font-weight:700; margin-bottom:8px; color:var(--primary-500);">🎓 Riwayat Pendidikan</h4>
+      <div style="background:var(--bg-input); padding:14px; border-radius:var(--radius-md); font-size:12.5px; line-height:1.6;">
+        <div><strong>• S1:</strong> ${lengkapInfo['S1 PT'] || '-'} (${lengkapInfo['S1 Prodi'] || '-'}) ${lengkapInfo['S1 Gelar'] ? ' - ' + lengkapInfo['S1 Gelar'] : ''}</div>
+        <div><strong>• S2:</strong> ${lengkapInfo['S2 PT'] || '-'} (${lengkapInfo['S2 Prodi'] || '-'}) ${lengkapInfo['S2 Gelar'] ? ' - ' + lengkapInfo['S2 Gelar'] : ''}</div>
+        ${lengkapInfo['S3 PT'] && lengkapInfo['S3 PT'] !== '-' ? `<div><strong>• S3 (Doktor):</strong> ${lengkapInfo['S3 PT']} (${lengkapInfo['S3 Prodi'] || '-'}) ${lengkapInfo['S3 Gelar'] ? ' - ' + lengkapInfo['S3 Gelar'] : ''}</div>` : ''}
+      </div>
+    </div>
+
+    <!-- Metrik SINTA -->
+    <div style="margin-bottom:20px;">
+      <h4 style="font-size:14px; font-weight:700; margin-bottom:8px; color:var(--primary-500);">📊 Metrik SINTA & Sitasi</h4>
+      <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:8px;">
+        <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:var(--primary-500);">${sintaInfo['SINTA Overall'] || sintaInfo['Overall Score'] || '0'}</div>
+          <div style="font-size:10px; color:var(--text-muted);">SINTA Overall</div>
+        </div>
+        <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:var(--accent-purple);">${scopusList.length}</div>
+          <div style="font-size:10px; color:var(--text-muted);">Scopus Art.</div>
+        </div>
+        <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:var(--accent-cyan);">${scholarList.length}</div>
+          <div style="font-size:10px; color:var(--text-muted);">Scholar Art.</div>
+        </div>
+        <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:var(--accent-emerald);">${garudaList.length}</div>
+          <div style="font-size:10px; color:var(--text-muted);">Garuda Art.</div>
+        </div>
+        <div style="background:var(--bg-input); padding:10px; border-radius:var(--radius-sm); text-align:center;">
+          <div style="font-size:18px; font-weight:800; color:var(--accent-amber);">${sintaInfo['Scholar Citations'] || (sintaInfo['Scholar (Art/Cit/H)'] ? sintaInfo['Scholar (Art/Cit/H)'].split('/')[1]?.trim() : '0')}</div>
+          <div style="font-size:10px; color:var(--text-muted);">Total Sitasi</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab Publikasi -->
+    <div>
+      <div style="display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap;">
+        <button onclick="dossierTab(this,'dscopus')" class="dtab-btn" style="font-size:11px; padding:5px 12px; border-radius:20px; border:1px solid var(--primary-500); background:var(--primary-500); color:#fff; cursor:pointer; font-weight:600;">🌐 Scopus (${scopusList.length})</button>
+        <button onclick="dossierTab(this,'dscholar')" class="dtab-btn" style="font-size:11px; padding:5px 12px; border-radius:20px; border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); cursor:pointer; font-weight:600;">📚 Scholar (${scholarList.length})</button>
+        <button onclick="dossierTab(this,'dgaruda')" class="dtab-btn" style="font-size:11px; padding:5px 12px; border-radius:20px; border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); cursor:pointer; font-weight:600;">🇮🇩 Garuda (${garudaList.length})</button>
+        <button onclick="dossierTab(this,'driset')" class="dtab-btn" style="font-size:11px; padding:5px 12px; border-radius:20px; border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); cursor:pointer; font-weight:600;">🔬 Riset (${penelitianList.length})</button>
+        <button onclick="dossierTab(this,'dpkm')" class="dtab-btn" style="font-size:11px; padding:5px 12px; border-radius:20px; border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); cursor:pointer; font-weight:600;">🤝 PkM (${pengabdianList.length})</button>
+      </div>
+
+      <div id="dscopus" class="dtab-panel">
+        ${scopusList.length === 0 ? '<p style="font-size:12px; color:var(--text-muted); padding:16px; text-align:center;">Belum ada artikel Scopus tercatat.</p>' : `
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${scopusList.map((a, i) => {
+              const q = a['Quartile']||'-';
+              const qc = q==='Q1'?'#10b981':q==='Q2'?'#06b6d4':q==='Q3'?'#f59e0b':'#6b7280';
+              const title = a['Judul Artikel Ilmiah'] || a['Judul'] || a['Judul Artikel'] || '-';
+              const link = a['Link'] || a['link'] || (a['DOI'] ? `https://doi.org/${a['DOI']}` : `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`);
+              return `<div style="background:var(--bg-input); padding:12px 14px; border-radius:var(--radius-sm); font-size:12px; border-left:3px solid ${qc};"><div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px;"><div style="display:flex; align-items:center; gap:8px;"><span style="font-size:10px; font-weight:700; color:${qc}; background:${qc}22; padding:2px 7px; border-radius:10px;">${q}</span><span style="font-size:10px; color:var(--text-muted);">Tahun: <strong>${a['Tahun']||'-'}</strong></span><span style="font-size:10px; color:var(--text-muted);">Sitasi: <strong>${a['Sitasi']||'0'}</strong></span></div><a href="${link}" target="_blank" rel="noopener" class="badge badge-purple" style="font-size:10px; text-decoration:none;">Buka Scopus ↗</a></div><div style="font-weight:700; margin-bottom:3px; line-height:1.4;">${i+1}. ${escapeHtml(title)}</div><div style="font-size:11px; color:var(--text-secondary); font-style:italic;">${escapeHtml(a['Jurnal']||a['Nama Jurnal / Prosiding']||'')}</div></div>`;
+            }).join('')}
+          </div>
+        `}
+      </div>
+
+      <div id="dscholar" class="dtab-panel" style="display:none;">
+        ${scholarList.length === 0 ? '<p style="font-size:12px; color:var(--text-muted); padding:16px; text-align:center;">Belum ada artikel Google Scholar tercatat.</p>' : `
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${scholarList.map((a, i) => {
+              const title = a['Judul Artikel Ilmiah'] || a['Judul'] || a['judul'] || a['Judul Publikasi'] || '-';
+              const link = a['Link'] || a['link'] || `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`;
+              return `<div style="background:var(--bg-input); padding:12px 14px; border-radius:var(--radius-sm); font-size:12px; border-left:3px solid #06b6d4;"><div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px;"><div style="display:flex; align-items:center; gap:8px;"><span style="font-size:10px; color:var(--text-muted);">Tahun: <strong>${a['Tahun']||'-'}</strong></span><span style="font-size:10px; color:#f59e0b;">⭐ Sitasi: <strong>${a['Sitasi']||'0'}</strong></span></div><a href="${link}" target="_blank" rel="noopener" class="badge badge-blue" style="font-size:10px; text-decoration:none;">Buka Scholar ↗</a></div><div style="font-weight:700; margin-bottom:3px; line-height:1.4;">${i+1}. ${escapeHtml(title)}</div><div style="font-size:11px; color:var(--text-secondary); font-style:italic;">${escapeHtml(a['Jurnal / Penerbit']||a['Jurnal']||'')}</div></div>`;
+            }).join('')}
+          </div>
+        `}
+      </div>
+
+      <div id="dgaruda" class="dtab-panel" style="display:none;">
+        ${garudaList.length === 0 ? '<p style="font-size:12px; color:var(--text-muted); padding:16px; text-align:center;">Belum ada artikel Garuda/SINTA tercatat.</p>' : `
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${garudaList.map((a, i) => { const sl = a['SINTA Level']||'-'; const slNum = sl.match(/\d+/)?.[0]||''; const slColor = slNum==='1'?'#10b981':slNum==='2'?'#06b6d4':slNum==='3'?'#3b82f6':slNum==='4'?'#f59e0b':'#6b7280'; const slBorder = slNum==='1'?'#10b981':slNum==='2'?'#06b6d4':slNum==='3'?'#3b82f6':slNum==='4'?'#f59e0b':'#10b981'; return `<div style="background:var(--bg-input); padding:12px 14px; border-radius:var(--radius-sm); font-size:12px; border-left:3px solid ${slBorder};"><div style="display:flex; align-items:center; gap:6px; margin-bottom:5px; flex-wrap:wrap;"><span style="font-size:10px; font-weight:700; color:${slColor}; background:${slColor}22; padding:2px 8px; border-radius:10px;">${sl !== '-' ? sl : '🇮🇩 Garuda'}</span><span style="font-size:10px; color:var(--text-muted);">Tahun: <strong>${a['Tahun']||'-'}</strong></span>${a['DOI']?`<a href="https://doi.org/${a['DOI']}" target="_blank" style="font-size:10px; color:var(--primary-500); text-decoration:none;">🔗 DOI</a>`:''}</div><div style="font-weight:700; margin-bottom:4px; line-height:1.4;">${i+1}. ${escapeHtml(a['Judul Artikel Ilmiah']||a['Judul']||'-')}</div><div style="font-size:11px; color:var(--text-secondary); font-style:italic; line-height:1.4;">${escapeHtml(a['Nama Jurnal']||a['Jurnal']||'')}</div></div>`; }).join('')}
+          </div>
+        `}
+      </div>
+
+      <div id="driset" class="dtab-panel" style="display:none;">
+        ${penelitianList.length === 0 ? '<p style="font-size:12px; color:var(--text-muted); padding:16px; text-align:center;">Belum ada data penelitian tercatat.</p>' : `
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${penelitianList.map((a, i) => `<div style="background:var(--bg-input); padding:12px 14px; border-radius:var(--radius-sm); font-size:12px; border-left:3px solid #a855f7;"><div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;"><span style="font-size:10px; font-weight:700; color:#a855f7; background:#a855f722; padding:2px 7px; border-radius:10px;">🔬 Penelitian</span><span style="font-size:10px; color:var(--text-muted);">Tahun: <strong>${a['Tahun']||a['Tahun Pelaksanaan']||'-'}</strong></span>${a['Dana']||a['Sumber Dana']?`<span style="font-size:10px; color:#f59e0b;">💰 ${escapeHtml(a['Dana']||a['Sumber Dana'])}</span>`:''}</div><div style="font-weight:700; margin-bottom:3px; line-height:1.4;">${i+1}. ${escapeHtml(a['Judul']||a['Judul Penelitian']||'-')}</div>${a['Ketua']?`<div style="font-size:11px; color:var(--text-secondary);">Ketua: ${escapeHtml(a['Ketua'])}</div>`:''}</div>`).join('')}
+          </div>
+        `}
+      </div>
+
+      <div id="dpkm" class="dtab-panel" style="display:none;">
+        ${pengabdianList.length === 0 ? '<p style="font-size:12px; color:var(--text-muted); padding:16px; text-align:center;">Belum ada data pengabdian masyarakat tercatat.</p>' : `
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${pengabdianList.map((a, i) => `<div style="background:var(--bg-input); padding:12px 14px; border-radius:var(--radius-sm); font-size:12px; border-left:3px solid #f59e0b;"><div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;"><span style="font-size:10px; font-weight:700; color:#f59e0b; background:#f59e0b22; padding:2px 7px; border-radius:10px;">🤝 PkM</span><span style="font-size:10px; color:var(--text-muted);">Tahun: <strong>${a['Tahun']||a['Tahun Pelaksanaan']||'-'}</strong></span>${a['Dana']||a['Sumber Dana']?`<span style="font-size:10px; color:#10b981;">💰 ${escapeHtml(a['Dana']||a['Sumber Dana'])}</span>`:''}</div><div style="font-weight:700; margin-bottom:3px; line-height:1.4;">${i+1}. ${escapeHtml(a['Judul']||a['Judul Pengabdian']||'-')}</div>${a['Ketua']?`<div style="font-size:11px; color:var(--text-secondary);">Ketua: ${escapeHtml(a['Ketua'])}</div>`:''}</div>`).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+
+  modalOverlay.classList.add('active');
+}
+
+function dossierTab(btn, panelId) {
+  document.querySelectorAll('.dtab-btn').forEach(b => {
+    b.style.background = 'transparent';
+    b.style.color = 'var(--text-secondary)';
+    b.style.borderColor = 'var(--border-subtle)';
+  });
+  btn.style.background = 'var(--primary-500)';
+  btn.style.color = '#fff';
+  btn.style.borderColor = 'var(--primary-500)';
+  document.querySelectorAll('.dtab-panel').forEach(p => p.style.display = 'none');
+  const panel = document.getElementById(panelId);
+  if (panel) panel.style.display = 'block';
+}
+
+function closeModal() {
+  const modalOverlay = document.getElementById('modal-overlay');
+  if (modalOverlay) modalOverlay.classList.remove('active');
+}
+
+/* ===================================================================
+   HELPERS & UTILITIES
+   =================================================================== */
+
+function onTabSearch(val) {
+  state.searchQuery = val.toLowerCase().trim();
+  state.currentPage = 1;
+  renderActiveTabContent();
+}
+
+function onYearFilterChange(val) {
+  state.selectedYear = val;
+  state.currentPage = 1;
+  renderProdiYearBar();
+  renderActiveTabContent();
+}
+
+function extractDistinctYears(list, yearKeys = ['Tahun', 'tahun', 'Tahun Akademik / Semester', 'Semester Terakhir']) {
+  const years = new Set();
+  (list || []).forEach(item => {
+    for (const key of yearKeys) {
+      const val = item[key];
+      if (val) {
+        const matches = String(val).match(/\b(20\d\d|19\d\d)\b/g);
+        if (matches) {
+          matches.forEach(m => years.add(m));
+        }
+      }
+    }
+  });
+  return Array.from(years).sort((a, b) => b.localeCompare(a));
+}
+
+function applyFilters(list, searchKeys, yearKeys = ['Tahun', 'tahun', 'Tahun Akademik / Semester', 'Semester Terakhir']) {
+  let result = list || [];
+
+  if (state.selectedYear && state.selectedYear !== 'all') {
+    result = result.filter(item => {
+      return yearKeys.some(key => {
+        const val = item[key];
+        return val && String(val).includes(state.selectedYear);
+      });
+    });
+  }
+
+  if (state.searchQuery) {
+    result = result.filter(item => {
+      return searchKeys.some(k => {
+        const val = item[k];
+        return val && String(val).toLowerCase().includes(state.searchQuery);
+      });
+    });
+  }
+
+  return result;
+}
+
+function renderYearFilterSelect(years, currentYear) {
+  if (!years || years.length === 0) return '';
+  return `
+    <select class="table-select-filter" onchange="onYearFilterChange(this.value)" title="Pilih filter tahun">
+      <option value="all" ${currentYear === 'all' ? 'selected' : ''}>📅 Semua Tahun (${years.length})</option>
+      ${years.map(y => `<option value="${y}" ${currentYear === y ? 'selected' : ''}>Tahun ${y}</option>`).join('')}
+    </select>
+  `;
+}
+
+function renderProdiYearBar() {
+  const container = document.getElementById('prodi-year-bar');
+  if (!container) return;
+
+  if (state.activeProdi === 'komparasi') {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'flex';
+
+  const prodiKey = state.activeProdi;
+  const data = APP_DATA[prodiKey];
+  if (!data) return;
+
+  const allYears = extractDistinctYears([
+    ...(data.scopus || []),
+    ...(data.gscholar || []),
+    ...(data.garuda || []),
+    ...(data.penelitian || []),
+    ...(data.pengabdian || []),
+    ...(data.hki || []),
+    ...(data.buku || []),
+    ...(data.mhs_historis || [])
+  ], ['Tahun', 'tahun', 'Tahun Akademik / Semester']);
+
+  container.innerHTML = `
+    <span class="year-bar-label">📅 Filter Cepat Tahun:</span>
+    <button class="year-chip ${state.selectedYear === 'all' ? 'active' : ''}" onclick="onYearFilterChange('all')">Semua Tahun</button>
+    ${allYears.map(y => `
+      <button class="year-chip ${state.selectedYear === y ? 'active' : ''}" onclick="onYearFilterChange('${y}')">${y}</button>
+    `).join('')}
+  `;
+}
+
+function filterList(list, keys) {
+  if (!state.searchQuery) return list;
+  return list.filter(item => {
+    return keys.some(k => {
+      const val = item[k];
+      return val && String(val).toLowerCase().includes(state.searchQuery);
+    });
+  });
+}
+
+function paginateList(list, page, pageSize) {
+  const total = list.length;
+  const totalPages = Math.ceil(total / pageSize);
+  const cur = Math.max(1, Math.min(page, totalPages || 1));
+  const start = (cur - 1) * pageSize;
+  const end = Math.min(start + pageSize, total);
+  return {
+    items: list.slice(start, end),
+    total,
+    totalPages,
+    start: total > 0 ? start + 1 : 0,
+    end
+  };
+}
+
+function changePage(newPage) {
+  state.currentPage = newPage;
+  renderActiveTabContent();
+}
+
+function getInitials(name) {
+  if (!name) return 'DS';
+  const parts = name.replace(/Dr\.|S\.T|S\.Kom|M\.T|M\.Kom|S\.E|M\.S\.M|S\.Si|M\.Si/gi, '').trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0][0] || 'D').toUpperCase();
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function exportCurrentTableToCSV(filename) {
+  const table = document.getElementById('export-target-table');
+  if (!table) return alert('Tabel tidak ditemukan untuk diekspor.');
+
+  let csv = [];
+  const rows = table.querySelectorAll('tr');
+  rows.forEach(r => {
+    let row = [];
+    r.querySelectorAll('th, td').forEach(c => {
+      let txt = c.innerText.replace(/"/g, '""').trim();
+      row.push(`"${txt}"`);
+    });
+    csv.push(row.join(','));
+  });
+
+  const blob = new Blob([csv.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename || 'data_export.csv';
+  link.click();
+}
